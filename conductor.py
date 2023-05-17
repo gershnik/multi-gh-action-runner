@@ -183,7 +183,7 @@ def configureRunners() -> Dict[str, any]:
 def startRunner(repo: str, name: str, repoLogDir: Path):
     runnerPath = MYPATH / f'runners/{repo}/{name}'
     env = os.environ.copy()
-    for key, value in settings["extraEnv"].items():
+    for key, value in settings.get("extraEnv", {}).items():
         env[key] = value.format(**os.environ)
     try:
         logging.info(f"Starting {repo} {name}...")
