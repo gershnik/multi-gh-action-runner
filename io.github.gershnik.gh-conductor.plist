@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.github.gershnik.gh-conductor</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{MYPATH}/.venv/bin/python</string>
+        <string>conductor.py</string>
+    </array>
+    <key>UserName</key>
+    <string>{USER}</string>
+    <key>GroupName</key>
+    <string>{GROUP}</string>
+    <key>WorkingDirectory</key>
+    <string>{MYPATH}</string>
+    <key>EnvironmentVariables</key>
+	<dict>
+	    <key>PATH</key>
+	    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/sbin</string>
+	</dict>
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{MYPATH}/logs/conductor.log</string>
+    <key>StandardErrorPath</key>
+    <string>{MYPATH}/logs/conductor.log</string>
+</dict>
+</plist>

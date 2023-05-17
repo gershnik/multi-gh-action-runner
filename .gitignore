@@ -1,0 +1,9 @@
+.venv/
+.vscode/
+
+downloads/
+logs/
+runners/
+
+.DS_Store
+settings.json
