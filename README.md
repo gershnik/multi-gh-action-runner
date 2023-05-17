@@ -39,6 +39,7 @@ pip3 install -r requirements.txt
 ```js
 {
     "token": "Github token to use goes here...",
+    "org": "your github account name or org name",
     "repos": {
         "name-of-a-repo": { "count": N, "namePrefix": "my-runner", "labels": ["my-label", ...]}, 
         ...

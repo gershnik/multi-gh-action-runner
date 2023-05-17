@@ -44,6 +44,8 @@ subprocess.run(['pkill', '-INT', 'Runner.Listener'], stdin=None)
 with open(MYPATH / 'settings.json') as settingsFile:
     settings = json.load(settingsFile)
 
+ORG = settings["org"]
+
 logging.info("Connecting to Github API")
 rq = Requester(settings["token"],
                password=None,
@@ -79,7 +81,7 @@ def tokenForRepo(repo: str):
     token = ConfigTokens.get(repo)
     now = datetime.now().astimezone()
     if not token or token.expiresAt <= now:
-        _, data = rq.requestJsonAndCheck("POST", f"/repos/gershnik/{repo}/actions/runners/registration-token")
+        _, data = rq.requestJsonAndCheck("POST", f"/repos/{ORG}/{repo}/actions/runners/registration-token")
         token = Token(data['token'], datetime.fromisoformat(data['expires_at']))
         ConfigTokens[repo] = token
     return token
@@ -98,7 +100,7 @@ def configureRunner(repo: str, name: str, labels: List[str], runnerPath: Path):
     logging.info(f'Configuring runner {name} for {repo} at {runnerPath}')
     with open(repoLogDir / f'config-{name}.log', 'w') as logFile:
         subprocess.run(['./config.sh', '--unattended', 
-                        '--url', f'https://github.com/gershnik/{repo}',
+                        '--url', f'https://github.com/{ORG}/{repo}',
                         '--token', token.value,
                         '--name', name,
                         '--labels', ','.join(labels),
@@ -106,7 +108,7 @@ def configureRunner(repo: str, name: str, labels: List[str], runnerPath: Path):
 
 def deleteGHRunner(repo, runner):
     runnerId = runner['id']
-    rq.requestJsonAndCheck("DELETE", f"/repos/gershnik/{repo}/actions/runners/{runnerId}")
+    rq.requestJsonAndCheck("DELETE", f"/repos/{ORG}/{repo}/actions/runners/{runnerId}")
 
 
 def configureRunners() -> Dict[str, any]:
@@ -115,7 +117,7 @@ def configureRunners() -> Dict[str, any]:
     for repo, config in settings['repos'].items():
         logging.info(f"Processing repo {repo}")
         
-        _, data = rq.requestJsonAndCheck("GET", f"/repos/gershnik/{repo}/actions/runners")
+        _, data = rq.requestJsonAndCheck("GET", f"/repos/{ORG}/{repo}/actions/runners")
 
         oldConfiguredRunners = {}
         for runner in data["runners"]:
