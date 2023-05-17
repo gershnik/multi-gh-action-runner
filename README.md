@@ -36,7 +36,7 @@ source .venv/bin/activate
 pip3 install -r requirements.txt
 ```
 * Create JSON configuration file `settings.json`. The template is given below:
-```json
+```js
 {
     "token": "Github token to use goes here...",
     "repos": {
