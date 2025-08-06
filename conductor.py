@@ -8,6 +8,7 @@ import tarfile
 import subprocess
 import signal
 import logging
+import platform
 
 import urllib.request
 
@@ -72,7 +73,36 @@ def fetchLatestPackage(runnerPlatform: str, downloadDir: Path):
         urllib.request.urlretrieve(url, packagePath)
     return packagePath
 
-PackagePath = fetchLatestPackage('osx-x64', DownloadDir)
+
+System = platform.system() 
+Arch = platform.machine()
+if System == 'Darwin':
+    if Arch == 'x86_64':
+        PackageLabel='osx-x64'
+    elif Arch == 'arm64':
+        PackageLabel=f'osx-arm64'
+    else:
+        raise RuntimeError(f'Unsupported architecture: {Arch}')
+elif System == 'Windows':
+    if Arch == 'AMD64':
+        PackageLabel='win-x64'
+    elif Arch == 'ARM64':
+        PackageLabel='win-arm64'
+    else:
+        raise RuntimeError(f'Unsupported architecture: {Arch}')
+elif System == 'Linux':
+    if Arch == 'x86_64':
+        PackageLabel='linux-x64'
+    elif Arch == 'arm64':
+        PackageLabel='linux-arm64'
+    else:
+        raise RuntimeError(f'Unsupported architecture: {Arch}')
+else:
+    raise RuntimeError(f'Unsupported system: {System}')
+
+logging.info(f"Using package: {PackageLabel}")
+
+PackagePath = fetchLatestPackage(PackageLabel, DownloadDir)
 
 ConfigTokens = {}
 
