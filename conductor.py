@@ -9,6 +9,8 @@ import subprocess
 import signal
 import logging
 import platform
+import socket
+import time
 
 import urllib.request
 
@@ -23,7 +25,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from setproctitle import setproctitle
 
-from typing import List, Dict
+from typing import Any, List, Dict
 
 @dataclass
 class Token:
@@ -46,33 +48,6 @@ with open(MYPATH / 'settings.json') as settingsFile:
     settings = json.load(settingsFile)
 
 ORG = settings["org"]
-
-logging.info("Connecting to Github API")
-rq = Requester(settings["token"],
-               password=None,
-               jwt=None,
-               app_auth=None,
-               base_url=GHA_DEFAULT_BASE_URL,
-               timeout=GHA_DEFAULT_TIMEOUT,
-               user_agent="PyGithub/Python",
-               per_page=GHA_DEFAULT_PER_PAGE,
-               verify=True,
-               retry=None,
-               pool_size=None)
-
-
-def fetchLatestPackage(runnerPlatform: str, downloadDir: Path):
-    _, data = rq.requestJsonAndCheck("GET", '/repos/actions/runner/releases/latest')
-    latestVersionLabel = data['tag_name']
-    latestVersion = latestVersionLabel[1:]
-    runnerFile=f"actions-runner-{runnerPlatform}-{latestVersion}.tar.gz"
-    downloadDir.mkdir(exist_ok=True)
-    packagePath = downloadDir / runnerFile
-    if not packagePath.exists():
-        url = f"https://github.com/actions/runner/releases/download/{latestVersionLabel}/{runnerFile}"
-        urllib.request.urlretrieve(url, packagePath)
-    return packagePath
-
 
 System = platform.system() 
 Arch = platform.machine()
@@ -102,31 +77,47 @@ else:
 
 logging.info(f"Using package: {PackageLabel}")
 
-PackagePath = fetchLatestPackage(PackageLabel, DownloadDir)
+
+def fetchLatestPackage(rq: Requester, runnerPlatform: str, downloadDir: Path):
+    _, data = rq.requestJsonAndCheck("GET", '/repos/actions/runner/releases/latest')
+    if data is None:
+        raise RuntimeError('Github request did not return data')
+    latestVersionLabel = data['tag_name']
+    latestVersion = latestVersionLabel[1:]
+    runnerFile=f"actions-runner-{runnerPlatform}-{latestVersion}.tar.gz"
+    downloadDir.mkdir(exist_ok=True)
+    packagePath = downloadDir / runnerFile
+    if not packagePath.exists():
+        url = f"https://github.com/actions/runner/releases/download/{latestVersionLabel}/{runnerFile}"
+        urllib.request.urlretrieve(url, packagePath)
+    return packagePath
+
 
 ConfigTokens = {}
 
-def tokenForRepo(repo: str):
+def tokenForRepo(rq: Requester, repo: str):
     global ConfigTokens
     token = ConfigTokens.get(repo)
     now = datetime.now().astimezone()
     if not token or token.expiresAt <= now:
         _, data = rq.requestJsonAndCheck("POST", f"/repos/{ORG}/{repo}/actions/runners/registration-token")
+        if data is None:
+            raise RuntimeError('Github request did not return data')
         token = Token(data['token'], datetime.fromisoformat(data['expires_at']))
         ConfigTokens[repo] = token
     return token
 
 
-def configureRunner(repo: str, name: str, labels: List[str], runnerPath: Path):
+def configureRunner(rq: Requester, packagePath: Path, repo: str, name: str, labels: List[str], runnerPath: Path):
     runnerPath.mkdir(parents=True)
     logging.info(f'Unpacking runner package into {runnerPath}')
-    with tarfile.open(PackagePath) as package:
+    with tarfile.open(packagePath) as package:
         package.extractall(runnerPath)
 
     repoLogDir = LogDir / repo
     repoLogDir.mkdir(parents=True, exist_ok=True)
 
-    token = tokenForRepo(repo)
+    token = tokenForRepo(rq, repo)
     logging.info(f'Configuring runner {name} for {repo} at {runnerPath}')
     with open(repoLogDir / f'config-{name}.log', 'w') as logFile:
         subprocess.run(['./config.sh', '--unattended', 
@@ -136,18 +127,20 @@ def configureRunner(repo: str, name: str, labels: List[str], runnerPath: Path):
                         '--labels', ','.join(labels),
                         '--replace'], cwd=runnerPath, check=True, stdout=logFile, stderr=logFile, stdin=None)
 
-def deleteGHRunner(repo, runner):
+def deleteGHRunner(rq: Requester, repo, runner):
     runnerId = runner['id']
     rq.requestJsonAndCheck("DELETE", f"/repos/{ORG}/{repo}/actions/runners/{runnerId}")
 
 
-def configureRunners() -> Dict[str, any]:
+def configureRunners(rq: Requester, packagePath: Path) -> Dict[str, Any]:
     logging.info("Configuring runners")
     runnersByRepo = {}
     for repo, config in settings['repos'].items():
         logging.info(f"Processing repo {repo}")
         
         _, data = rq.requestJsonAndCheck("GET", f"/repos/{ORG}/{repo}/actions/runners")
+        if data is None:
+            raise RuntimeError('Github request did not return data')
 
         oldConfiguredRunners = {}
         for runner in data["runners"]:
@@ -175,18 +168,18 @@ def configureRunners() -> Dict[str, any]:
                 else:
                     logging.info(f"Runner {name} already configured but labels don't match, removing directory and configuring")
                     shutil.rmtree(runnerPath)
-                    configureRunner(repo, name, newLabels, runnerPath)
+                    configureRunner(rq, packagePath, repo, name, newLabels, runnerPath)
             elif runner:
                 logging.warning(f"Runner {name} is configured on Github but has no directory, configuring and replacing")
                 #deleteGHRunner(repo, runner)
-                configureRunner(repo, name, newLabels, runnerPath)
+                configureRunner(rq, packagePath, repo, name, newLabels, runnerPath)
             elif runnerPath.exists():
                 logging.warning(f"Runner {name} has a directory but not Github config, removing directory and configuring")
                 shutil.rmtree(runnerPath)
-                configureRunner(repo, name, newLabels, runnerPath)
+                configureRunner(rq, packagePath, repo, name, newLabels, runnerPath)
             else:
                 logging.info(f"Runner {name} is new, configuring")
-                configureRunner(repo, name, newLabels, runnerPath)
+                configureRunner(rq, packagePath, repo, name, newLabels, runnerPath)
             
 
         for name, runner in oldConfiguredRunners.items():
@@ -195,7 +188,7 @@ def configureRunners() -> Dict[str, any]:
                 continue
 
             logging.info(f"Runner {name} is configured on Github but no longer in our configuration, removing from Github")
-            deleteGHRunner(repo, runner)
+            deleteGHRunner(rq, repo, runner)
             runnerPath = MYPATH / f'runners/{repo}/{name}'
             if runnerPath.exists():
                 logging.info(f"Removing obsolete {runnerPath}")
@@ -237,8 +230,6 @@ def startRunner(repo: str, name: str, repoLogDir: Path):
         logging.exception(ex)
         return None
             
-runnersByRepo = configureRunners()
-
 
 childProcesses = {}
 childrenKilled = False
@@ -260,34 +251,74 @@ def handleSignal(signo, frame):
     logging.info(f"Received signal {signame}")
     killAllChildren()
 
-signal.signal(signal.SIGINT, handleSignal)
-signal.signal(signal.SIGTERM, handleSignal)
 
-logging.info("Starting runners")
-for repo, runners in runnersByRepo.items():
-    repoLogDir = LogDir / repo
-    repoLogDir.mkdir(parents=True, exist_ok=True)
-    for name in runners:
-        childId = startRunner(repo, name, repoLogDir)
-        if childId is None:
-            killAllChildren()
+def isConnected(hostname):
+    try:
+        # See if we can resolve the host name - tells us if there is
+        # A DNS listening
+        host = socket.gethostbyname(hostname)
+        # Connect to the host - tells us if the host is actually reachable
+        s = socket.create_connection((host, 80), 2)
+        s.close()
+        return True
+    except Exception:
+        pass # We ignore any errors, returning False
+    return False
+
+
+def main():
+    signal.signal(signal.SIGINT, handleSignal)
+    signal.signal(signal.SIGTERM, handleSignal)
+
+    logging.info("Waiting for network")
+    while True:
+        if isConnected('one.one.one.one'):
             break
-        childProcesses[childId] = (repo, name)
+        time.sleep(5)
+
+    logging.info("Connecting to Github API")
+    rq = Requester(settings["token"],
+                password=None,
+                jwt=None,
+                app_auth=None,
+                base_url=GHA_DEFAULT_BASE_URL,
+                timeout=GHA_DEFAULT_TIMEOUT,
+                user_agent="PyGithub/Python",
+                per_page=GHA_DEFAULT_PER_PAGE,
+                verify=True,
+                retry=None,
+                pool_size=None)
+    
+    packagePath = fetchLatestPackage(rq, PackageLabel, DownloadDir)
+    runnersByRepo = configureRunners(rq, packagePath)
+
+    logging.info("Starting runners")
+    for repo, runners in runnersByRepo.items():
+        repoLogDir = LogDir / repo
+        repoLogDir.mkdir(parents=True, exist_ok=True)
+        for name in runners:
+            childId = startRunner(repo, name, repoLogDir)
+            if childId is None:
+                killAllChildren()
+                break
+            childProcesses[childId] = (repo, name)
 
 
-logging.info("Waiting for runners")
-while len(childProcesses) > 0:
-    pid, status = os.waitpid(-1, os.WUNTRACED)
-    repo, name = childProcesses[pid]
-    del childProcesses[pid]
-    if os.WIFSIGNALED(status):
-        termsig = os.WTERMSIG(status)
-        signame = signal.strsignal(termsig) or str(termsig)
-        logging.info(f"Runner for {repo} {name} was killed by signal {signame} - exiting")
-        killAllChildren()
-    else:
-        exitCode = os.WEXITSTATUS(status)
-        logging.info(f"Runner for {repo} {name} exited with code {exitCode} - exiting")
-        killAllChildren()
+    logging.info("Waiting for runners")
+    while len(childProcesses) > 0:
+        pid, status = os.waitpid(-1, os.WUNTRACED)
+        repo, name = childProcesses[pid]
+        del childProcesses[pid]
+        if os.WIFSIGNALED(status):
+            termsig = os.WTERMSIG(status)
+            signame = signal.strsignal(termsig) or str(termsig)
+            logging.info(f"Runner for {repo} {name} was killed by signal {signame} - exiting")
+            killAllChildren()
+        else:
+            exitCode = os.WEXITSTATUS(status)
+            logging.info(f"Runner for {repo} {name} exited with code {exitCode} - exiting")
+            killAllChildren()
 
 
+if __name__ == '__main__':
+    main()
